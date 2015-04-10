@@ -1,0 +1,193 @@
+CoreOS ARM64 HOWTO
+2015.04.10
+
+Copyright (C) 2015 Huawei Futurewei Technologies
+
+Permission is granted to copy, distribute and/or modify this document under the
+terms of the GNU Free Documentation License, Version 1.3 published by the Free
+Software Foundation; with no Invariant Sections, no Front-Cover Texts, and no
+Back-Cover Texts. A copy of the license is included in the section entitled "GNU
+Free Documentation License".
+
+DISCLAIMER
+
+THIS DOCUMENT IS PROVIDED "AS IS," AND COPYRIGHT HOLDERS MAKE NO REPRESENTATIONS
+OR WARRANTIES, EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, OR TITLE;
+THAT THE CONTENTS OF THE DOCUMENT ARE SUITABLE FOR ANY PURPOSE; NOR THAT THE
+IMPLEMENTATION OF SUCH CONTENTS WILL NOT INFRINGE ANY THIRD PARTY PATENTS,
+COPYRIGHTS, TRADEMARKS OR OTHER RIGHTS.  COPYRIGHT HOLDERS WILL NOT BE LIABLE
+FOR ANY DIRECT, INDIRECT, SPECIAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF ANY
+USE OF THE DOCUMENT OR THE PERFORMANCE OR IMPLEMENTATION OF THE CONTENTS
+THEREOF.
+
+TRADEMARK NOTICE
+
+COREOS is a trademark of CoreOS, Inc.  Linux® is the registered trademark of
+Linus Torvalds in the U.S. and other countries.  ARM are registered trademarks
+or trademarks of ARM Limited or its affiliates in the EU and/or elsewhere.
+Other company, product, brand, and service names mentioned in this document
+may be the trademarks of others.
+
+ABOUT THIS DOCUMENT
+
+This note describes how to setup a ARM64 development environment for CoreOS.
+
+You can always find the latest version of this document, and some other useful
+technical documents here:
+
+  http://glevand.github.io/coreos/
+
+Please send comments to <geoff@infradead.org>.  I can also be reached on
+freenode/#coreos as geoff-
+
+CoreOS ARM64 HOWTO
+
+1) Setup CoreOS ARM64 Development Tree 
+
+I maintain a CoreOS ARM64 porting manifest on my Github site.  Use it to
+download a complete CoreOS development source tree that has my ARM64 porting
+repositories all hooked up.
+
+Follow the CoreOS SDK instructions here:
+
+  https://coreos.com/docs/sdk-distributors/sdk/modifying-coreos/
+
+But use my manifest when initializing your local repositories:
+
+  repo init -u https://github.com/glevand/coreos--manifest.git -g minilayout \
+    --repo-url https://chromium.googlesource.com/external/repo.git
+  repo sync
+
+The board name is 'arm64-usr'.  Either setup a .default_board file:
+
+  echo arm64-usr > .default_board
+  
+Or, pass the --board=arm64-usr to the CoreOS build utilities.
+
+
+2) ARM64 Target Setup
+
+I describe how to set things up with Ubuntu.  Fedora or other distros should be
+much the same.  As of now, you'll need to run with a separate kernel and CoreOS
+root file system image.  Work needs to be done to integrate with the output of
+the CoreOS build.
+
+A lot of info is out there for general ARM64 development.  You'll most likely
+find yourself over at the Linaro site -- https://www.linaro.org/.
+
+Newer QEMU system emulation supports ARM64 (qemu-system-aarch64).  I recommend
+this for anyone starting out, as it is easy to use and runs faster than than the
+Foundation Model.
+
+ARM Limited provides their Foundation Model, a fairly comprehensive ARM64 system
+model that runs on x86_64 systems.  There is no cost, but download requires
+registering with their site.
+
+If you are doing kernel level work you'll need to get access to the ARM FVP_BASE
+Fast Model.  This model comes with a very nice QT based GUI debugger. A license
+from ARM is required to run this model. 
+
+96Boards.org has low cost developer boards.  The Hikey is one I recommend as it
+has a large and active user base.  The kernel support is not all upstream as of
+Linux-4.0 though, and availability is limited as of early 2015. 
+
+  https://www.96boards.org/products/hikey/
+
+
+3a) Setup qemu-system-aarch64
+
+Newer distros may have a packaged qemu-system-aarch64 that you can use.  To get
+the latest features build it from source.  It generally builds without trouble.
+
+Follow steps like these to install:
+
+  sudo aptitude install build-dep qemu screen
+
+  git clone git://git.qemu-project.org/qemu.git
+
+  ./configure --target-list='aarch64-linux-user aarch64-softmmu'
+  make
+  sudo make install
+
+I run it like this:
+
+qemu-system-aarch64 \
+  -machine virt  -cpu cortex-a57  -machine type=virt  -m 2048 \
+  -nographic  -nodefaults  -serial pty  -monitor stdio \
+  -kernel ${dev_path}/linux/arch/arm64/boot/Image \
+   --append 'console=ttyAMA0 root=/dev/vda rw loglevel=9 text' \
+  -drive if=none,id=blk,file=${path_to}/rootfs.img \
+   -device virtio-blk-device,drive=blk \
+  -net user,hostfwd=tcp::10022-:22 \
+   -device virtio-net-device,vlan=0 \
+  -fsdev local,id=host_dev,path=${dev_path},security_model=none \
+   -device virtio-9p-device,fsdev=host_dev,mount_tag=host_dev
+
+With these options the serial console will come up on a host pty.  QEMU will
+tell you which one when it starts up.  Use screen or some other terminal
+emulator to connect:
+
+  screen /dev/ptyXX
+
+The -fsdev option will mount a host directory tree in the qemu ARM64 guest,
+which allows you to work with files from both the host and target.
+
+In the qemu guest use something like this to mount the host directory:
+
+  mount -t 9p -o trans=virtio host_dev ${dev_path}
+
+Or better:
+
+  echo "host_dev ${dev_path} 9p trans=virtio 0 0" >> /etc/fstab
+
+
+3b) Setup Foundation Model
+
+With the Foundation Model you can use the kernel wrapper, or UEFI firmware
+binaries from Linaro. 
+
+Get the Foundation Model from the ARM site:
+
+  http://www.arm.com/products/tools/models/fast-models/foundation-model.php
+
+And the wrapper:
+
+  git clone git://git.kernel.org/pub/scm/linux/kernel/git/mark/boot-wrapper-aarch64.git
+
+  (cd ${dev_path}/boot-wrapper-aarch64 && autoconf -i)
+  ${dev_path}/boot-wrapper-aarch64/configure --host=aarch64-linux-gnu \
+    --with-kernel-dir=${dev_path}/builds/arm64/linux --with-initrd=no \
+    --enable-psci=yes \
+    --with-dtb=${dev_path}/linux/arch/arm64/boot/dts/foundation-v8.dtb
+
+  make  CMDLINE='console=ttyAMA0 earlyprintk=pl011,0x1c090000 root=/dev/vda rw \
+    --verbose debug loglevel=9' clean all
+
+To run the model:
+
+  ${path_to}/Foundation_v8 --cores=4 --network=nat --network-nat-ports=8022=22 \
+    --no-secure-memory --gicv3 \
+    --image=${dev_path}/boot-wrapper-aarch64/linux-system.axf  \
+    --block-device=${path_to}/rootfs.img
+
+    
+4) Gentoo ARM64 Stage 3
+
+If you find yourself needing to build something natively on the ARM64 target
+you may be able to use the Gentoo arm64 Stage 3 image.  The latest image
+available as of April 2015 is somewhat dated, but is a convenient starting point
+towards setting things up.  Get the latest from here, or somewhere else if you
+can find something newer:
+
+  http://distfiles.gentoo.org/experimental/arm64/
+
+Then use steps like these to get a root file system you can boot in
+qemu-system-aarch64:
+
+  dd if=/dev/zero of=gentoo-rootfs.img bs=1G count=8
+  mkfs.ext4 gentoo-rootfs.img
+  mkdir -p /tmp/rootfs
+  sudo mount gentoo-rootfs.img /tmp/rootfs
+  sudo tar -C /tmp/rootfs -xf stage3-arm64-xxxxxxxx.tar.bz2
+  sudo umount /tmp/rootfs
